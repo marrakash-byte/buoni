@@ -243,6 +243,7 @@ function cardNum(it){
   var c=String(it.card||'').replace(/\D/g,'');
   if(it.shop==='Lidl'){
     if(c.length===36)c=c.slice(18);
+    if(/^10000/.test(c)&&/^\d{20}$/.test(String(it.bc||'')))c=it.bc;
     var b=String(it.bc||'').replace(/\D/g,'');
     if((/^20000/.test(c)||c===b)&&/^\d{36}$/.test(b))c=b.slice(18);
   }
@@ -444,11 +445,14 @@ function parseVoucher(text,barcode,fromImage){
   m=v.shop==='Lidl'?(t.match(reB)||t.match(reA)):(t.match(reA)||t.match(reB));
   if(m)v.bal=(+m[1].replace(',','.')).toFixed(2);
   if(v.shop==='Lidl'){
-    m=t.match(/\b(\d{4}) ?(\d{4}) ?(\d{4}) ?(\d{4}) ?(\d{2})\b/g)||[];
-    for(var i=0;i<m.length;i++){var cd=m[i].replace(/\D/g,'');if(!/^20000/.test(cd)||/ /.test(m[i])){v.card=cd;break}}
+    var m20=t.match(/\b\d{4} ?\d{4} ?\d{4} ?\d{4} ?\d{4}\b/);
+    m=m20?[]:(t.match(/\b(\d{4}) ?(\d{4}) ?(\d{4}) ?(\d{4}) ?(\d{2})\b/g)||[]);
+    if(m20)v.card=m20[0].replace(/\D/g,'');
+    for(var i=0;i<m.length;i++){var cd=m[i].replace(/\D/g,'');if(!/^[12]0000/.test(cd)||/ /.test(m[i])){v.card=cd;break}}
     var refs=t.match(/\b\d{18}\b/g)||[];
     for(i=0;i<refs.length;i++)if(refs[i]!==v.card){v.ref=refs[i];break}
     if(barcode&&/^\d{36}$/.test(barcode))v.card=barcode.slice(18);
+    if(barcode&&/^\d{20}$/.test(barcode))v.card=barcode;
   }else{
     m=t.match(/Kartennummer\D{0,40}((?:\d[ ]?){15}\d)/i)||t.match(/\b(\d{4} ?\d{4} ?\d{4} ?\d{4})\b/);
     if(m)v.card=m[1].replace(/\D/g,'');
