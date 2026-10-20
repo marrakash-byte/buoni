@@ -56,8 +56,14 @@ input,select{width:100%;min-height:50px;font-size:18px;padding:10px 12px;border:
 <body>
 <div id="list" class="view on">
   <header><h1>Buoni</h1><div style="display:flex;gap:8px"><button class="btn small sec" id="importBtn">Importa PDF / foto</button><button class="btn small" id="addBtn">+ Nuovo</button></div></header>
-  <input type="file" id="pdfInput" accept="application/pdf,.pdf,image/*" multiple hidden>
+  <input type="file" id="pdfInput" accept="application/pdf,.pdf,image/*,application/json,.json" multiple hidden>
   <main><div id="cards"></div>
+  <div class="box" id="backupBox" style="margin-top:24px;background:#fff">
+    <div style="font-weight:700;margin-bottom:6px">Backup</div>
+    <div class="hint" style="margin:0 0 10px">Per spostare i buoni su un altro dispositivo: «Esporta buoni» crea un file, poi sull'altro dispositivo usa «Importa backup». <b>Il file contiene numeri e PIN: tienilo privato</b> (salvalo in File o mandalo solo a te stesso).</div>
+    <div class="row"><button class="btn sec" id="exportBtn" type="button">Esporta buoni</button><button class="btn sec" id="restoreBtn" type="button">Importa backup</button></div>
+    <input type="file" id="jsonInput" accept="application/json,.json" hidden>
+  </div>
   <p class="hint" style="text-align:center;margin-top:24px">I dati restano solo su questo telefono (memoria del browser). I PDF e le foto importati vengono letti sul telefono e non vengono caricati da nessuna parte.<br>Per installarla: Condividi → «Aggiungi alla schermata Home».</p></main>
 </div>
 
@@ -505,9 +511,84 @@ async function importFiles(files){
   if(failed.length){show('list');alert(msg+'\n'+(failed.some(function(x){return x.fromImage})?'Controlla i dati letti dalla foto (soprattutto il PIN) e completa quelli mancanti.':'Completa i dati a mano.'));editQueue=failed.slice(1);openEdit(failed[0])}
   else{show('list');toast(msg)}
 }
+/* ---------- Backup: esporta / importa (file JSON, solo tramite file dell'utente) ---------- */
+var FIELDS=['id','shop','name','card','pin','bc','bal','date','ref','balNote','mode'];
+function backupName(){return 'buoni-backup-'+today()+'.json'}
+function backupJson(){return JSON.stringify({app:'buoni',version:1,exported:new Date().toISOString(),items:items},null,2)}
+function downloadBlob(blob,name){
+  var url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download=name;a.rel='noopener';a.style.display='none';document.body.appendChild(a);a.click();
+  setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url)},4000);
+}
+async function exportBackup(){
+  if(!items.length){toast('Nessun buono da esportare');return}
+  var name=backupName(),json=backupJson(),blob=new Blob([json],{type:'application/json'});
+  var file=null;try{file=new File([blob],name,{type:'application/json'})}catch(e){}
+  if(file&&navigator.share&&navigator.canShare){
+    var can=false;try{can=navigator.canShare({files:[file]})}catch(e){}
+    if(can){
+      try{await navigator.share({files:[file],title:'Backup buoni'});toast('Backup pronto: tienilo privato');return}
+      catch(e){if(e&&e.name==='AbortError')return;console.warn('share',e)}
+    }
+  }
+  downloadBlob(blob,name);toast('File '+name+' scaricato. Contiene i PIN: tienilo privato');
+}
+function dateNum(d){return /^\d{4}-\d{2}-\d{2}$/.test(d||'')?d:''}
+function normItem(o,list){
+  if(!o||typeof o!=='object')return null;
+  var it={};for(var i=0;i<FIELDS.length;i++){var k=FIELDS[i],v=o[k];if(v!=null&&typeof v!=='object')it[k]=String(v)}
+  it.card=clean(it.card);if(!it.card)return null;
+  if(['Lidl','Coop','Altro'].indexOf(it.shop)<0)it.shop='Altro';
+  it.pin=clean(it.pin);it.bc=clean(it.bc);it.bal=it.bal?parseBal(it.bal):'';it.date=dateNum(it.date);
+  if(it.mode!=='bc'&&it.mode!=='card')delete it.mode;
+  if(!it.id||list.some(function(x){return x.id===it.id}))it.id=newId();
+  return it;
+}
+function mergeBackup(text){
+  var data;try{data=JSON.parse(text)}catch(e){throw new Error('Il file non è un backup valido (JSON non leggibile).')}
+  var arr=Array.isArray(data)?data:(data&&data.app==='buoni'&&Array.isArray(data.items))?data.items:null;
+  if(!arr)throw new Error('Il file non è un backup della pagina Buoni.');
+  if(data&&data.version!=null&&+data.version>1)throw new Error('Backup creato da una versione più nuova della pagina. Aggiorna la pagina e riprova.');
+  var next=items.slice(),added=0,dups=0,upd=0,bad=0;
+  for(var i=0;i<arr.length;i++){
+    var o=arr[i],card=o&&clean(o.card);
+    var ex=card?next.filter(function(x){return x.card===card})[0]:null;
+    if(ex){
+      var nd=dateNum(o.date);
+      if(nd&&nd>(ex.date||'')){ex.bal=o.bal?parseBal(o.bal):'';ex.date=nd;ex.balNote=o.balNote?String(o.balNote):'';upd++}
+      else dups++;
+      continue;
+    }
+    var it=normItem(o,next);if(!it){bad++;continue}
+    next.push(it);added++;
+  }
+  items=next;save(items);
+  var parts=[added===1?'1 buono aggiunto':added+' buoni aggiunti'];
+  if(dups||!upd)parts.push(dups===1?'1 già presente':dups+' già presenti');
+  if(upd)parts.push(upd===1?'1 saldo aggiornato':upd+' saldi aggiornati');
+  if(bad)parts.push(bad===1?'1 non valido':bad+' non validi');
+  var r={added:added,dups:dups,updated:upd,invalid:bad,msg:parts.join(', ')};
+  window.Buoni.lastBackup=r;return r;
+}
+async function importBackupFiles(files){
+  var msgs=[];
+  for(var i=0;i<files.length;i++){
+    try{var r=mergeBackup(await files[i].text());msgs.push(r.msg)}
+    catch(e){window.Buoni.lastBackup={error:e.message};renderList();show('list');alert(e.message+'\nI buoni già salvati non sono stati toccati.');return}
+  }
+  renderList();show('list');if(msgs.length)alert(msgs.join('\n'));
+}
+function isJson(f){return /json/i.test(f.type)||/\.json$/i.test(f.name)}
+$('exportBtn').onclick=function(){exportBackup()};
+$('restoreBtn').onclick=function(){var inp=$('jsonInput');inp.value='';inp.click()};
+$('jsonInput').addEventListener('change',function(e){var fs=Array.prototype.slice.call(e.target.files||[]);if(fs.length)importBackupFiles(fs)});
 $('importBtn').onclick=function(){var inp=$('pdfInput');inp.value='';inp.click()};
-$('pdfInput').addEventListener('change',function(e){importFiles(Array.prototype.slice.call(e.target.files||[]))});
-window.Buoni={encode128:encode128,parseVoucher:parseVoucher,importFiles:importFiles};
+$('pdfInput').addEventListener('change',async function(e){
+  var fs=Array.prototype.slice.call(e.target.files||[]),js=fs.filter(isJson),other=fs.filter(function(f){return !isJson(f)});
+  if(js.length)await importBackupFiles(js);
+  if(other.length)importFiles(other);
+});
+window.Buoni={encode128:encode128,parseVoucher:parseVoucher,importFiles:importFiles,backupJson:backupJson,mergeBackup:mergeBackup};
 
 renderList();
 })();
