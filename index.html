@@ -104,6 +104,7 @@ input,select{width:100%;min-height:50px;font-size:18px;padding:10px 12px;border:
     <button class="btn" id="checkBtn">Controlla saldo</button>
     <div class="hint" style="margin:6px 0 4px">Copia il numero carta e apre la pagina ufficiale. Incolla, poi torna qui per copiare il PIN.</div>
     <div class="row" style="margin-top:10px"><button class="btn sec" id="copyCardBtn">Copia numero</button><button class="btn sec" id="copyPinBtn">Copia PIN</button></div>
+    <div class="hint" id="bCard" style="margin-top:8px;text-align:center;font-size:15px"></div>
     <div class="hint pin" id="bPin" style="margin-top:8px;text-align:center"></div>
     <label for="newBal">Aggiorna saldo (CHF)</label>
     <div class="row"><input id="newBal" inputmode="decimal" placeholder="nuovo saldo"><button class="btn" id="saveBalBtn" style="flex:0 0 110px">Salva</button></div>
@@ -229,6 +230,7 @@ function openBar(id){
   $('bRef').textContent=it.ref?'Rif. '+it.ref:'';
   var link=LINKS[it.shop];
   $('checkBtn').style.display=link?'block':'none';
+  var cn=cardNum(it);$('bCard').textContent=cn?'Numero carta: '+cn.replace(/(.{4})(?=.)/g,'$1 '):'';
   $('bPin').textContent=it.pin?'PIN: '+it.pin:'';
   $('newBal').value='';
   show('bar');
@@ -237,6 +239,15 @@ $('seg').addEventListener('click',function(e){var b=e.target.closest('button');i
 $('backBtn').onclick=function(){renderList();show('list')};
 $('editBtn').onclick=function(){openEdit(find(cur))};
 
+function cardNum(it){
+  var c=String(it.card||'').replace(/\D/g,'');
+  if(it.shop==='Lidl'){
+    if(c.length===36)c=c.slice(18);
+    var b=String(it.bc||'').replace(/\D/g,'');
+    if((/^20000/.test(c)||c===b)&&/^\d{36}$/.test(b))c=b.slice(18);
+  }
+  return c;
+}
 function copy(text){
   function fb(){var ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.top='0';ta.style.opacity='0';document.body.appendChild(ta);
     var r=document.createRange();r.selectNodeContents(ta);var s=window.getSelection();s.removeAllRanges();s.addRange(r);ta.setSelectionRange(0,text.length);
@@ -246,11 +257,11 @@ function copy(text){
   if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).catch(function(){})}
   return ok||!!navigator.clipboard;
 }
-$('copyCardBtn').onclick=function(){var it=find(cur);if(it){copy(it.card);toast('Numero carta copiato')}};
+$('copyCardBtn').onclick=function(){var it=find(cur);if(it){var c=cardNum(it);copy(c);toast('Copiato numero carta …'+c.slice(-4))}};
 $('copyPinBtn').onclick=function(){var it=find(cur);if(!it)return;if(!it.pin){toast('Nessun PIN salvato');return}copy(it.pin);toast('PIN copiato')};
 $('checkBtn').onclick=function(){
   var it=find(cur);if(!it)return;var link=LINKS[it.shop];if(!link)return;
-  copy(it.card);toast('Numero carta copiato');
+  var c=cardNum(it);copy(c);toast('Copiato numero carta …'+c.slice(-4));
   var w=window.open(link,'_blank');if(w){try{w.opener=null}catch(e){}}else{location.href=link}
 };
 $('saveBalBtn').onclick=function(){
