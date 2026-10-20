@@ -11,6 +11,7 @@
 <meta name="format-detection" content="telephone=no">
 <meta name="robots" content="noindex">
 <title>Buoni</title>
+<link rel="icon" href="data:,">
 <style>
 :root{--bg:#f4f5f7;--card:#fff;--txt:#111;--mut:#666;--pri:#0050aa;--lidl:#0050aa;--coop:#e2001a;--alt:#555;--r:14px}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -48,19 +49,22 @@ input,select{width:100%;min-height:50px;font-size:18px;padding:10px 12px;border:
 .bal{font-size:30px;font-weight:800}
 #toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 24px);transform:translateX(-50%);background:#111;color:#fff;padding:12px 20px;border-radius:24px;font-weight:600;opacity:0;transition:opacity .2s;z-index:50;pointer-events:none;max-width:90%;text-align:center}
 #toast.on{opacity:1}
+#busy{position:fixed;inset:0;background:rgba(255,255,255,.85);z-index:40;display:none;align-items:center;justify-content:center;font-size:20px;font-weight:700}#busy.on{display:flex}
 .pin{font-family:ui-monospace,Menlo,monospace}
 </style>
 </head>
 <body>
 <div id="list" class="view on">
-  <header><h1>Buoni</h1><button class="btn small" id="addBtn">+ Nuovo</button></header>
+  <header><h1>Buoni</h1><div style="display:flex;gap:8px"><button class="btn small sec" id="importBtn">Importa PDF / foto</button><button class="btn small" id="addBtn">+ Nuovo</button></div></header>
+  <input type="file" id="pdfInput" accept="application/pdf,.pdf,image/*" multiple hidden>
   <main><div id="cards"></div>
-  <p class="hint" style="text-align:center;margin-top:24px">I dati restano solo su questo telefono (memoria del browser).<br>Per installarla: Condividi → «Aggiungi alla schermata Home».</p></main>
+  <p class="hint" style="text-align:center;margin-top:24px">I dati restano solo su questo telefono (memoria del browser). I PDF e le foto importati vengono letti sul telefono e non vengono caricati da nessuna parte.<br>Per installarla: Condividi → «Aggiungi alla schermata Home».</p></main>
 </div>
 
 <div id="edit" class="view">
   <header><h1 id="editTitle">Nuovo buono</h1></header>
   <main>
+    <div id="editHint" class="box" style="display:none;margin:0 0 6px;background:#fff6d6"></div>
     <form id="form" autocomplete="off">
       <label for="f_shop">Negozio</label>
       <select id="f_shop"><option>Lidl</option><option>Coop</option><option>Altro</option></select>
@@ -89,7 +93,7 @@ input,select{width:100%;min-height:50px;font-size:18px;padding:10px 12px;border:
   <div class="top"><button class="btn small sec" id="backBtn">‹ Indietro</button><button class="btn small sec" id="editBtn">Modifica</button></div>
   <h2 id="bTitle" style="margin-top:12px"></h2>
   <div class="seg" id="seg"><button data-k="card">Numero carta</button><button data-k="bc">Codice a barre</button></div>
-  <div id="bcwrap"><svg id="bcsvg" xmlns="http://www.w3.org/2000/svg"></svg><div id="bcnum"></div></div>
+  <div id="bcwrap"><svg id="bcsvg" xmlns="http://www.w3.org/2000/svg"></svg><div id="bcnum"></div><div class="hint" id="bRef" style="text-align:center"></div></div>
   <div class="hint" style="text-align:center">Alza la luminosità dello schermo al massimo alla cassa.</div>
   <div class="box">
     <div class="hint">Saldo noto</div>
@@ -105,7 +109,7 @@ input,select{width:100%;min-height:50px;font-size:18px;padding:10px 12px;border:
     <div class="row"><input id="newBal" inputmode="decimal" placeholder="nuovo saldo"><button class="btn" id="saveBalBtn" style="flex:0 0 110px">Salva</button></div>
   </div>
 </div>
-<div id="toast"></div>
+<div id="toast"></div><div id="busy"><div id="busyTxt" style="padding:24px;text-align:center">Lettura…</div></div>
 
 <script>
 (function(){
@@ -146,7 +150,8 @@ function renderBarcode(svg,text){
 var KEY='buoni.v1';
 function load(){try{return JSON.parse(localStorage.getItem(KEY))||[]}catch(e){return[]}}
 function save(a){localStorage.setItem(KEY,JSON.stringify(a))}
-var items=load(),cur=null,mode='card';
+var items=load(),cur=null,mode='card',pendingExtra=null,editQueue=[];
+function newId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,8)}
 var LINKS={Lidl:'https://www.lidl.ch/c/de-CH/guthabenabfrage-fuer-einkaufsgutscheine/s10077601',Coop:'https://www.coop.ch/de/unternehmen/geschenkkarten/saldoabfrage.html'};
 var $=function(id){return document.getElementById(id)};
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
@@ -163,31 +168,44 @@ function renderList(){
   var c=$('cards');
   if(!items.length){c.innerHTML='<div class="empty">Nessun buono.<br>Tocca «+ Nuovo» per aggiungerne uno.</div>';return}
   c.innerHTML=items.map(function(it){
-    return '<button class="card" data-id="'+esc(it.id)+'"><div class="tag '+esc(it.shop)+'">'+esc(it.shop)+'</div><div class="cinfo"><div class="cname">'+esc(it.name||it.shop)+'</div><div class="cbal">'+fmtBal(it.bal)+'</div><div class="cdate">'+(it.date?'aggiornato '+fmtDate(it.date):'saldo non aggiornato')+'</div></div><div style="font-size:26px;color:#bbb">›</div></button>';
+    return '<button class="card" data-id="'+esc(it.id)+'"><div class="tag '+esc(it.shop)+'">'+esc(it.shop)+'</div><div class="cinfo"><div class="cname">'+esc(it.name||it.shop)+'</div><div class="cbal">'+fmtBal(it.bal)+'</div><div class="cdate">'+(it.date?(it.balNote?it.balNote+' ':'aggiornato ')+fmtDate(it.date):'saldo non aggiornato')+'</div></div><div style="font-size:26px;color:#bbb">›</div></button>';
   }).join('');
 }
 $('cards').addEventListener('click',function(e){var b=e.target.closest('.card');if(b)openBar(b.getAttribute('data-id'))});
 
 function openEdit(it){
-  cur=it?it.id:null;
-  $('editTitle').textContent=it?'Modifica buono':'Nuovo buono';
-  $('f_shop').value=it?it.shop:'Lidl';$('f_name').value=it?it.name:'';$('f_card').value=it?it.card:'';
-  $('f_pin').value=it?it.pin:'';$('f_bc').value=it?it.bc:'';$('f_bal').value=it?it.bal:'';$('f_date').value=it?it.date:'';
-  $('delBtn').style.display=it?'block':'none';
+  cur=it&&it.id?it.id:null;
+  $('editTitle').textContent=cur?'Modifica buono':(it?'Controlla i dati':'Nuovo buono');
+  $('f_shop').value=it&&it.shop?it.shop:'Lidl';var g=function(k){return it&&it[k]!=null?it[k]:''};
+  $('f_name').value=g('name');$('f_card').value=g('card');
+  $('f_pin').value=g('pin');$('f_bc').value=g('bc');$('f_bal').value=g('bal');$('f_date').value=g('date');
+  pendingExtra=it&&!cur?{ref:g('ref'),balNote:g('balNote')}:null;
+  $('delBtn').style.display=cur?'block':'none';
+  var hint='';
+  if(it&&!cur&&it.fromImage)hint='Dati letti dalla foto: controlla numero carta e <b>PIN</b> prima di salvare.'+(it.pin?'':' PIN non leggibile, inseriscilo a mano.');
+  else if(it&&!cur&&it.err)hint='File non leggibile: inserisci i dati a mano.';
+  else if(it&&!cur)hint='Non ho trovato tutti i dati: completa quelli mancanti.';
+  if(hint&&editQueue.length)hint+=' (altri '+editQueue.length+' da controllare dopo)';
+  $('editHint').innerHTML=hint;$('editHint').style.display=hint?'block':'none';
   show('edit');
 }
 $('addBtn').onclick=function(){openEdit(null)};
-$('cancelBtn').onclick=function(){if(cur&&find(cur))openBar(cur);else{renderList();show('list')}};
+$('cancelBtn').onclick=function(){if(!cur&&editQueue.length){openEdit(editQueue.shift());return}if(cur&&find(cur))openBar(cur);else{renderList();show('list')}};
 $('form').addEventListener('submit',function(e){
   e.preventDefault();
   var card=clean($('f_card').value);if(!card){toast('Inserisci il numero carta');return}
   var bal=parseBal($('f_bal').value),date=$('f_date').value;
   if(bal!==''&&!date)date=today();
+  var dup=items.filter(function(x){return x.id!==cur&&x.card===card})[0];
+  if(dup){if(!cur&&editQueue.length){toast('Già presente, salto');openEdit(editQueue.shift());return}toast('Esiste già un buono con questo numero');return}
   var it=cur?find(cur):null;
-  if(!it){it={id:Date.now().toString(36)+Math.random().toString(36).slice(2,6)};items.push(it)}
+  if(!it){it={id:newId()};if(pendingExtra){it.ref=pendingExtra.ref;it.balNote=pendingExtra.balNote}items.push(it)}
+  pendingExtra=null;
   it.shop=$('f_shop').value;it.name=$('f_name').value.trim();it.card=card;it.pin=clean($('f_pin').value);
-  it.bc=clean($('f_bc').value);it.bal=bal;it.date=date;
-  save(items);openBar(it.id);
+  it.bc=clean($('f_bc').value);if(cur&&(it.bal!==bal||it.date!==date))it.balNote='';it.bal=bal;it.date=date;
+  save(items);
+  if(editQueue.length){toast('Salvato');openEdit(editQueue.shift());return}
+  openBar(it.id);
 });
 $('delBtn').onclick=function(){
   if(!cur)return;if(!confirm('Eliminare questo buono?'))return;
@@ -207,7 +225,8 @@ function openBar(id){
   $('bTitle').textContent=it.name||it.shop;
   $('seg').style.display=(it.bc&&it.bc!==it.card)?'flex':'none';
   drawBar(it);
-  $('bBal').textContent=fmtBal(it.bal);$('bDate').textContent=it.date?'aggiornato il '+fmtDate(it.date):'';
+  $('bBal').textContent=fmtBal(it.bal);$('bDate').textContent=it.date?(it.balNote?it.balNote+' del ':'aggiornato il ')+fmtDate(it.date):'';
+  $('bRef').textContent=it.ref?'Rif. '+it.ref:'';
   var link=LINKS[it.shop];
   $('checkBtn').style.display=link?'block':'none';
   $('bPin').textContent=it.pin?'PIN: '+it.pin:'';
@@ -237,9 +256,244 @@ $('checkBtn').onclick=function(){
 $('saveBalBtn').onclick=function(){
   var it=find(cur);if(!it)return;var b=parseBal($('newBal').value);
   if(b===''){toast('Inserisci un importo');return}
-  it.bal=b;it.date=today();save(items);$('bBal').textContent=fmtBal(b);$('bDate').textContent='aggiornato il '+fmtDate(it.date);$('newBal').value='';toast('Saldo aggiornato');
+  it.bal=b;it.date=today();it.balNote='';save(items);$('bBal').textContent=fmtBal(b);$('bDate').textContent='aggiornato il '+fmtDate(it.date);$('newBal').value='';toast('Saldo aggiornato');
 };
-window.Buoni={encode128:encode128};
+/* ---------- Import immagini: codice a barre + OCR, tutto in locale ---------- */
+var ocrP=null;
+function loadScript(src){return new Promise(function(res,rej){var s=document.createElement('script');s.src=src;s.onload=res;s.onerror=function(){rej(new Error('load '+src))};document.head.appendChild(s)})}
+function getOcr(){
+  if(!ocrP){
+    var base=new URL('ocr/',location.href).href;
+    ocrP=(window.Tesseract?Promise.resolve():loadScript(base+'tesseract.min.js')).then(function(){
+      return Tesseract.createWorker(['deu','eng'],1,{workerPath:base+'worker.min.js',corePath:base+'core/',langPath:base+'lang/',workerBlobURL:false});
+    }).then(function(w){return w.setParameters({tessedit_pageseg_mode:'11',user_defined_dpi:'300'}).then(function(){return w})})
+      .catch(function(e){ocrP=null;throw e});
+  }
+  return ocrP;
+}
+function loadImage(file){
+  return new Promise(function(res,rej){
+    var url=URL.createObjectURL(file),im=new Image();
+    im.onload=function(){res(im)};im.onerror=function(){URL.revokeObjectURL(url);rej(new Error('Formato immagine non supportato'))};
+    im.src=url;
+  });
+}
+function imgToCanvas(im,scale){
+  var w=Math.round(im.naturalWidth*scale),h=Math.round(im.naturalHeight*scale);
+  var lim=Math.sqrt(14e6/(w*h));if(lim<1){w=Math.round(w*lim);h=Math.round(h*lim)}
+  var cv=document.createElement('canvas');cv.width=w;cv.height=h;
+  var cx=cv.getContext('2d',{willReadFrequently:true});cx.fillStyle='#fff';cx.fillRect(0,0,w,h);
+  cx.imageSmoothingEnabled=true;cx.imageSmoothingQuality='high';cx.drawImage(im,0,0,w,h);
+  return cv;
+}
+async function detectNative(src){
+  try{
+    if(!('BarcodeDetector' in window))return null;
+    var bd=new BarcodeDetector({formats:['code_128']});
+    var r=await bd.detect(src);
+    return r&&r[0]?r[0].rawValue:null;
+  }catch(e){return null}
+}
+async function readImage(file,status){
+  var im=await loadImage(file);
+  try{
+    var barcode=await detectNative(im);
+    var cv=imgToCanvas(im,1);
+    if(!barcode)barcode=scanCanvas(cv);
+    var big=imgToCanvas(im,2);cv.width=cv.height=0;
+    if(!barcode)barcode=scanCanvas(big);
+    status('Lettura testo (OCR)… può richiedere qualche secondo');
+    var w=await getOcr();
+    var r=await w.recognize(big);
+    big.width=big.height=0;
+    return {text:r.data.text||'',barcode:barcode};
+  }finally{URL.revokeObjectURL(im.src)}
+}
+/* ---------- Import PDF (tutto in locale, nessun upload) ---------- */
+var pdfjsP=null;
+function getPdfjs(){
+  if(!pdfjsP){
+    var base=new URL('pdfjs/',location.href).href;
+    pdfjsP=import(base+'pdf.min.mjs').then(function(m){m.GlobalWorkerOptions.workerSrc=base+'pdf.worker.min.mjs';return m})
+      .catch(function(e){pdfjsP=null;throw e});
+  }
+  return pdfjsP;
+}
+// Code128 decoder for a rendered canvas (scanlines); validates checksum
+function decodeRow(row){
+  // row: array of booleans (true=dark). Build runs starting with dark.
+  var runs=[],start=-1,i,n=row.length;
+  for(i=0;i<n;i++){if(row[i]){start=i;break}}
+  if(start<0)return null;
+  var cur=true,len=0;
+  for(i=start;i<n;i++){if(row[i]===cur)len++;else{runs.push(len);cur=row[i];len=1}}
+  runs.push(len);
+  var out=[];
+  for(var s=0;s+6<=runs.length;s+=2){
+    // a start symbol must follow a quiet zone (light run >= ~ 5 modules)
+    var m6=0;for(var k=0;k<6;k++)m6+=runs[s+k];
+    var mod=m6/11; if(mod<1)continue;
+    if(s>0&&runs[s-1]<mod*5)continue;
+    var res=tryDecode(runs,s);
+    if(res)return res;
+  }
+  return null;
+}
+function patAt(runs,s,len,mods){
+  if(s+len>runs.length)return null;
+  var t=0,k;for(k=0;k<len;k++)t+=runs[s+k];
+  var m=t/mods,p='';
+  for(k=0;k<len;k++){var v=Math.round(runs[s+k]/m);if(v<1)v=1;if(v>4)v=4;p+=v}
+  return p;
+}
+var PIDX={};for(var pi=0;pi<106;pi++)PIDX[P[pi]]=pi;
+function tryDecode(runs,s){
+  var c=PIDX[patAt(runs,s,6,11)];
+  if(c!==103&&c!==104&&c!==105)return null;
+  var codes=[c];s+=6;
+  while(s<runs.length){
+    if(patAt(runs,s,7,13)===P[106]){
+      if(codes.length<3)return null;
+      var chk=codes.pop(),sum=codes[0];
+      for(var j=1;j<codes.length;j++)sum+=codes[j]*j;
+      if(sum%103!==chk)return null;
+      return codesToText(codes);
+    }
+    var v=PIDX[patAt(runs,s,6,11)];
+    if(v===undefined||v>=103)return null;
+    codes.push(v);s+=6;
+  }
+  return null;
+}
+function codesToText(codes){
+  var set=codes[0]===105?'C':codes[0]===104?'B':'A',t='';
+  for(var i=1;i<codes.length;i++){
+    var c=codes[i];
+    if(set==='C'){
+      if(c<100){t+=(c<10?'0':'')+c;continue}
+      if(c===100){set='B';continue} if(c===101){set='A';continue} if(c===102)continue; return null;
+    }
+    if(c===99){set='C';continue}
+    if(set==='B'&&c===100||set==='A'&&c===101||c===102||c===98||c===96||c===97)continue;
+    if(set==='B'&&c===101){set='A';continue} if(set==='A'&&c===100){set='B';continue}
+    if(set==='B')t+=String.fromCharCode(c+32);
+    else t+=String.fromCharCode(c<64?c+32:c-64);
+  }
+  return t;
+}
+function scanCanvas(cv){
+  var ctx=cv.getContext('2d',{willReadFrequently:true}),w=cv.width,h=cv.height;
+  var data=ctx.getImageData(0,0,w,h).data,found={};
+  var step=Math.max(2,Math.round(h/600));
+  for(var y=0;y<h;y+=step){
+    var row=new Array(w),o=y*w*4;
+    for(var x=0;x<w;x++){var q=o+x*4;row[x]=(data[q]*0.3+data[q+1]*0.59+data[q+2]*0.11)<128}
+    var r=decodeRow(row);
+    if(r){found[r]=(found[r]||0)+1;if(found[r]>=3)return r}
+  }
+  var best=null,bn=0;for(var k in found)if(found[k]>bn){best=k;bn=found[k]}
+  return best;
+}
+async function readPdf(file){
+  var pdfjs=await getPdfjs();
+  var buf=await file.arrayBuffer();
+  var doc=await pdfjs.getDocument({data:new Uint8Array(buf),isEvalSupported:false}).promise;
+  var text='',barcode=null;
+  try{
+    var np=Math.min(doc.numPages,3);
+    for(var p=1;p<=np;p++){
+      var page=await doc.getPage(p);
+      var tc=await page.getTextContent();
+      text+=tc.items.map(function(it){return (it.str||'')+(it.hasEOL?'\n':' ')}).join('')+'\n';
+      if(!barcode){
+        var vp0=page.getViewport({scale:1});
+        var scale=Math.min(4,Math.sqrt(12e6/(vp0.width*vp0.height)));
+        var vp=page.getViewport({scale:scale});
+        var cv=document.createElement('canvas');cv.width=Math.floor(vp.width);cv.height=Math.floor(vp.height);
+        var cx=cv.getContext('2d',{willReadFrequently:true});cx.fillStyle='#fff';cx.fillRect(0,0,cv.width,cv.height);
+        await page.render({canvasContext:cx,canvas:cv,viewport:vp}).promise;
+        try{barcode=scanCanvas(cv)}catch(e){}
+        cv.width=cv.height=0;
+      }
+    }
+  }finally{try{doc.destroy()}catch(e){}}
+  return {text:text,barcode:barcode};
+}
+function parseVoucher(text,barcode,fromImage){
+  var t=text.replace(/\u00a0/g,' ');
+  var v={shop:'',name:'',card:'',pin:'',bc:'',bal:'',date:'',ref:'',balNote:''};
+  var isLidl=/lidl/i.test(t),isCoop=/coop|geschenkkarte|supercard/i.test(t);
+  v.shop=isLidl?'Lidl':isCoop?'Coop':'Altro';
+  var m;
+  // PIN
+  m=t.match(/PIN(?:[- ]?Code)?\s*[:\/]?\s*(\d{4,8})\b/i);
+  if(m)v.pin=m[1];
+  // value
+  var reA=/CHF\s*(\d{1,4}(?:[.,]\d{2})?)(?![\d])/i,reB=/(?:^|[^\d.,])(\d{1,4}(?:[.,]\d{2})?)\s*(?:\.-\s*)?CHF/i;
+  m=v.shop==='Lidl'?(t.match(reB)||t.match(reA)):(t.match(reA)||t.match(reB));
+  if(m)v.bal=(+m[1].replace(',','.')).toFixed(2);
+  if(v.shop==='Lidl'){
+    m=t.match(/\b(\d{4}) ?(\d{4}) ?(\d{4}) ?(\d{4}) ?(\d{2})\b/g)||[];
+    for(var i=0;i<m.length;i++){var cd=m[i].replace(/\D/g,'');if(!/^20000/.test(cd)||/ /.test(m[i])){v.card=cd;break}}
+    var refs=t.match(/\b\d{18}\b/g)||[];
+    for(i=0;i<refs.length;i++)if(refs[i]!==v.card){v.ref=refs[i];break}
+    if(barcode&&/^\d{36}$/.test(barcode))v.card=barcode.slice(18);
+  }else{
+    m=t.match(/Kartennummer\D{0,40}((?:\d[ ]?){15}\d)/i)||t.match(/\b(\d{4} ?\d{4} ?\d{4} ?\d{4})\b/);
+    if(m)v.card=m[1].replace(/\D/g,'');
+    if(barcode&&/^\d{16}$/.test(barcode))v.card=barcode;
+  }
+  if(!v.pin){ // fallback: a lone 4-digit token that is not part of the card number
+    var toks=t.match(/(^|\s)(\d{4})(?=\s|$)/g)||[],cardStr=v.card;
+    for(var j=0;j<toks.length;j++){var d=toks[j].trim();if(cardStr.indexOf(d)<0&&!/^(19|20)\d\d$/.test(d)){v.pin=d;break}}
+  }
+  if(barcode&&/^[\x20-\x7e]+$/.test(barcode))v.bc=barcode;
+  // Lidl CHF 100 digital cards observed: barcode = (01)04067534210134 (90)<card>; fallback if image decoding failed
+  if(!v.bc&&v.shop==='Lidl'&&v.card.length===18&&v.bal==='100.00')v.bc='010406753421013490'+v.card;
+  if(v.bc===v.card)v.bc='';
+  if(v.bal){v.date=today();v.balNote='valore iniziale'}
+  var amt=v.bal?(+v.bal%1===0?String(+v.bal):v.bal):'';
+  v.name=[v.shop,amt,v.card?'…'+v.card.slice(-4):''].filter(Boolean).join(' ');
+  v.ok=!!(v.card&&v.pin&&(v.shop==='Lidl'||v.shop==='Coop'));
+  if(fromImage){v.ok=false;v.fromImage=true}
+  return v;
+}
+function setBusy(t){$('busyTxt').textContent=t;$('busy').classList.add('on')}
+async function importFiles(files){
+  if(!files||!files.length)return;
+  setBusy('Lettura…');
+  var added=0,dups=0,failed=[],errs=0,lastId=null;
+  try{
+    for(var i=0;i<files.length;i++){
+      var r,v;
+      var f=files[i],isPdf=/pdf/i.test(f.type)||/\.pdf$/i.test(f.name);
+      setBusy((isPdf?'Lettura PDF':'Lettura immagine')+(files.length>1?' '+(i+1)+'/'+files.length:'')+'…');
+      try{
+        if(isPdf){r=await readPdf(f);v=parseVoucher(r.text,r.barcode,false)}
+        else{r=await readImage(f,setBusy);v=parseVoucher(r.text,r.barcode,true)}
+      }catch(e){errs++;console.warn('import',e);failed.push({shop:'Altro',name:f.name.replace(/\.[a-z0-9]+$/i,''),err:true});continue}
+      if(v.card&&items.some(function(x){return x.card===v.card})){dups++;continue}
+      if(!v.ok){failed.push(v);continue}
+      var it={id:newId(),shop:v.shop,name:v.name,card:v.card,pin:v.pin,bc:v.bc,bal:v.bal,date:v.date,ref:v.ref,balNote:v.balNote};
+      if(v.bc)it.mode='bc';
+      items.push(it);added++;lastId=it.id;
+    }
+    save(items);
+  }finally{$('busy').classList.remove('on')}
+  var parts=[];
+  parts.push(added===1?'1 buono importato':added+' buoni importati');
+  if(dups)parts.push(dups===1?'1 già presente':dups+' già presenti');
+  if(failed.length)parts.push(failed.length===1?'1 da completare':failed.length+' da completare');
+  var msg=parts.join(', ');
+  window.Buoni.lastImport={added:added,dups:dups,failed:failed.length,msg:msg};
+  renderList();
+  if(failed.length){show('list');alert(msg+'\n'+(failed.some(function(x){return x.fromImage})?'Controlla i dati letti dalla foto (soprattutto il PIN) e completa quelli mancanti.':'Completa i dati a mano.'));editQueue=failed.slice(1);openEdit(failed[0])}
+  else{show('list');toast(msg)}
+}
+$('importBtn').onclick=function(){var inp=$('pdfInput');inp.value='';inp.click()};
+$('pdfInput').addEventListener('change',function(e){importFiles(Array.prototype.slice.call(e.target.files||[]))});
+window.Buoni={encode128:encode128,parseVoucher:parseVoucher,importFiles:importFiles};
+
 renderList();
 })();
 </script>
