@@ -56,6 +56,8 @@ input,select{width:100%;min-height:50px;font-size:18px;padding:10px 12px;border:
 #fileView .ftop{display:flex;gap:8px;align-items:center;padding:calc(env(safe-area-inset-top) + 8px) 12px 8px;border-bottom:1px solid #eee;background:#fff}
 #fvName{flex:1;min-width:0;font-size:14px;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #fvBody{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;padding:8px 0 calc(env(safe-area-inset-bottom) + 16px);background:#fff}
+#syncPanel{display:none;margin-top:12px}#syncPanel.on{display:block}
+#syncStatus{margin-top:10px}#syncStatus.err{color:#b00020}
 #fvBody canvas,#fvBody img{display:block;width:100%;height:auto;margin:0 auto 8px;background:#fff}
 </style>
 </head>
@@ -64,13 +66,31 @@ input,select{width:100%;min-height:50px;font-size:18px;padding:10px 12px;border:
   <header><h1>Buoni</h1><div style="display:flex;gap:8px"><button class="btn small sec" id="importBtn">Importa PDF / foto</button><button class="btn small" id="addBtn">+ Nuovo</button></div></header>
   <input type="file" id="pdfInput" accept="application/pdf,.pdf,image/*,application/json,.json" multiple hidden>
   <main><div id="cards"></div>
-  <div class="box" id="backupBox" style="margin-top:24px;background:#fff">
+  <div class="box" id="syncBox" style="margin-top:24px;background:#fff">
+    <button class="btn" id="syncBtn" type="button">Sincronizza famiglia</button>
+    <div class="hint" id="syncStatus">Sync famiglia non attiva</div>
+    <div id="syncPanel">
+      <div id="syncSet">
+        <label for="syncCode" style="margin-top:4px">Codice famiglia</label>
+        <input id="syncCode" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="almeno 10 caratteri">
+        <div class="hint">Stesso codice su entrambi i telefoni. Chi ha il codice vede i buoni: non condividerlo con altri.</div>
+        <div class="row" style="margin-top:10px"><button class="btn sec" id="syncGenBtn" type="button">Genera codice</button><button class="btn" id="syncSaveBtn" type="button">Salva codice</button></div>
+      </div>
+      <div id="syncOn" style="display:none">
+        <div class="hint" style="margin:0">Codice: <span class="pin" id="syncMask"></span></div>
+        <div class="row" style="margin-top:10px"><button class="btn sec" id="syncPullBtn" type="button">Carica da cloud</button><button class="btn sec" id="syncPushBtn" type="button">Invia al cloud</button></div>
+        <button class="btn danger" id="syncOffBtn" type="button">Rimuovi codice</button>
+      </div>
+      <div class="hint" style="margin-top:10px">Si sincronizzano numeri, PIN e saldi, cifrati sul telefono. <b>PDF e foto restano solo su questo telefono.</b></div>
+    </div>
+  </div>
+  <div class="box" id="backupBox" style="margin-top:12px;background:#fff">
     <div style="font-weight:700;margin-bottom:6px">Backup</div>
     <div class="hint" style="margin:0 0 10px">Per spostare i buoni su un altro dispositivo: «Esporta buoni» crea un file, poi sull'altro dispositivo usa «Importa backup». <b>Il file contiene numeri e PIN: tienilo privato</b> (salvalo in File o mandalo solo a te stesso).</div>
     <div class="row"><button class="btn sec" id="exportBtn" type="button">Esporta buoni</button><button class="btn sec" id="restoreBtn" type="button">Importa backup</button></div>
     <input type="file" id="jsonInput" accept="application/json,.json" hidden>
   </div>
-  <p class="hint" style="text-align:center;margin-top:24px">I dati restano solo su questo telefono (memoria del browser). I PDF e le foto importati vengono letti sul telefono e non vengono caricati da nessuna parte.<br>Per installarla: Condividi → «Aggiungi alla schermata Home».</p></main>
+  <p class="hint" style="text-align:center;margin-top:24px">I dati restano su questo telefono (memoria del browser). Con la sync famiglia, i buoni vanno nel cloud cifrati con il vostro codice. I PDF e le foto importati vengono letti sul telefono e non vengono caricati da nessuna parte.<br>Per installarla: Condividi → «Aggiungi alla schermata Home».</p></main>
 </div>
 
 <div id="edit" class="view">
@@ -137,6 +157,8 @@ input,select{width:100%;min-height:50px;font-size:18px;padding:10px 12px;border:
 <script>
 (function(){
 'use strict';
+/* Sync famiglia: indirizzo del Worker Cloudflare (sync-worker/). Da aggiornare dopo il deploy. */
+var SYNC_BASE='https://buoni-sync.marrakash-byte.workers.dev';
 /* ---------- Code 128 (B/C auto) -> SVG ---------- */
 var P=["212222","222122","222221","121223","121322","131222","122213","122312","132212","221213","221312","231212","112232","122132","122231","113222","123122","123221","223211","221132","221231","213212","223112","312131","311222","321122","321221","312212","322112","322211","212123","212321","232121","111323","131123","131321","112313","132113","132311","211313","231113","231311","112133","112331","132131","113123","113321","133121","313121","211331","231131","213113","213311","213131","311123","311321","331121","312113","312311","332111","314111","221411","431111","111224","111422","121124","121421","141122","141221","112214","112412","122114","122411","142112","142211","241211","221114","413111","241112","134111","111242","121142","121241","114212","124112","124211","411212","421112","421211","212141","214121","412121","111143","111341","131141","114113","114311","411113","411311","113141","114131","311141","411131","211412","211214","211232","2331112"];
 function isD(s,i,n){if(i+n>s.length)return false;for(var k=i;k<i+n;k++){var c=s.charCodeAt(k);if(c<48||c>57)return false}return true}
@@ -172,7 +194,8 @@ function renderBarcode(svg,text){
 /* ---------- storage ---------- */
 var KEY='buoni.v1';
 function load(){try{return JSON.parse(localStorage.getItem(KEY))||[]}catch(e){return[]}}
-function save(a){localStorage.setItem(KEY,JSON.stringify(a))}
+function save(a){localStorage.setItem(KEY,JSON.stringify(a));if(window.Buoni&&window.Buoni.onSave)window.Buoni.onSave()}
+function stamp(it){it.upd=String(Date.now())}
 var items=load(),cur=null,mode='card',pendingExtra=null,editQueue=[],fileStage=null,fileIds={};
 /* ---------- File allegati: IndexedDB, solo su questo dispositivo ---------- */
 var FDB='buoni-files',FST='files',dbP=null,MAXF=30e6,persistAsked=false;
@@ -278,14 +301,14 @@ $('form').addEventListener('submit',async function(e){
   pendingExtra=null;
   it.shop=$('f_shop').value;it.name=$('f_name').value.trim();it.card=card;it.pin=clean($('f_pin').value);
   it.bc=clean($('f_bc').value);if(cur&&(it.bal!==bal||it.date!==date))it.balNote='';it.bal=bal;it.date=date;
-  save(items);
+  stamp(it);undelete(card);save(items);
   await applyFileStage(it.id);
   if(editQueue.length){toast('Salvato');openEdit(editQueue.shift());return}
   openBar(it.id);
 });
 $('delBtn').onclick=async function(){
   if(!cur)return;if(!confirm('Eliminare questo buono?'))return;
-  var id=cur;items=items.filter(function(x){return x.id!==id});save(items);fileStage=null;await delFile(id);cur=null;renderList();show('list');toast('Buono eliminato');
+  var id=cur,gone=find(id);if(gone)markDeleted(gone.card);items=items.filter(function(x){return x.id!==id});save(items);fileStage=null;await delFile(id);cur=null;renderList();show('list');toast('Buono eliminato');
 };
 
 function drawBar(it){
@@ -357,7 +380,7 @@ async function openViewer(id){
 $('openFileBtn').onclick=function(){if(cur)openViewer(cur)};
 $('fvClose').onclick=closeViewer;
 $('fvShare').onclick=function(){var r=fvRec;if(!r)return;var f=recFile(r);if(!f)return;navigator.share({files:[f]}).catch(function(e){if(!e||e.name!=='AbortError')toast('Condivisione non riuscita')})};
-$('seg').addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;var it=find(cur);if(!it)return;mode=b.getAttribute('data-k');it.mode=mode;save(items);drawBar(it)});
+$('seg').addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;var it=find(cur);if(!it)return;mode=b.getAttribute('data-k');it.mode=mode;stamp(it);save(items);drawBar(it)});
 $('backBtn').onclick=function(){renderList();show('list')};
 $('editBtn').onclick=function(){openEdit(find(cur))};
 
@@ -390,7 +413,7 @@ $('checkBtn').onclick=function(){
 $('saveBalBtn').onclick=function(){
   var it=find(cur);if(!it)return;var b=parseBal($('newBal').value);
   if(b===''){toast('Inserisci un importo');return}
-  it.bal=b;it.date=today();it.balNote='';save(items);$('bBal').textContent=fmtBal(b);$('bDate').textContent='aggiornato il '+fmtDate(it.date);$('newBal').value='';toast('Saldo aggiornato');
+  it.bal=b;it.date=today();it.balNote='';stamp(it);save(items);$('bBal').textContent=fmtBal(b);$('bDate').textContent='aggiornato il '+fmtDate(it.date);$('newBal').value='';toast('Saldo aggiornato');
 };
 /* ---------- Import immagini: codice a barre + OCR, tutto in locale ---------- */
 var ocrP=null;
@@ -614,6 +637,7 @@ async function importFiles(files){
       if(!v.ok){v.srcFile=f;failed.push(v);continue}
       var it={id:newId(),shop:v.shop,name:v.name,card:v.card,pin:v.pin,bc:v.bc,bal:v.bal,date:v.date,ref:v.ref,balNote:v.balNote};
       if(v.bc)it.mode='bc';
+      stamp(it);undelete(it.card);
       items.push(it);added++;lastId=it.id;
       save(items);
       try{await putFile(it.id,f)}catch(e){console.warn('file',e);fileErrs++}
@@ -633,7 +657,7 @@ async function importFiles(files){
   else{show('list');toast(msg)}
 }
 /* ---------- Backup: esporta / importa (file JSON, solo tramite file dell'utente) ---------- */
-var FIELDS=['id','shop','name','card','pin','bc','bal','date','ref','balNote','mode'];
+var FIELDS=['id','shop','name','card','pin','bc','bal','date','ref','balNote','mode','upd'];
 function backupName(){return 'buoni-backup-'+today()+'.json'}
 async function backupJson(){
   var out=[];
@@ -701,13 +725,13 @@ async function mergeBackup(text){
     var ex=card?next.filter(function(x){return x.card===card})[0]:null;
     if(ex){
       var nd=dateNum(o.date);
-      if(nd&&nd>(ex.date||'')){ex.bal=o.bal?parseBal(o.bal):'';ex.date=nd;ex.balNote=o.balNote?String(o.balNote):'';upd++}
+      if(nd&&nd>(ex.date||'')){ex.bal=o.bal?parseBal(o.bal):'';ex.date=nd;ex.balNote=o.balNote?String(o.balNote):'';stamp(ex);upd++}
       else dups++;
       var fx=fileFromBackup(o.file);if(fx&&!fileIds[ex.id])files.push([ex.id,fx]);
       continue;
     }
     var it=normItem(o,next);if(!it){bad++;continue}
-    next.push(it);added++;
+    stamp(it);next.push(it);added++;undelete(it.card);
     var fn=fileFromBackup(o&&o.file);if(fn)files.push([it.id,fn]);
   }
   items=next;save(items);
@@ -738,10 +762,151 @@ $('pdfInput').addEventListener('change',async function(e){
   if(js.length)await importBackupFiles(js);
   if(other.length)importFiles(other);
 });
-window.Buoni={encode128:encode128,parseVoucher:parseVoucher,importFiles:importFiles,backupJson:backupJson,mergeBackup:mergeBackup,getFile:getFile,openViewer:openViewer,fileIds:function(){return Object.keys(fileIds)}};
+/* ---------- Sync famiglia: cifratura sul telefono (AES-GCM), il server vede solo dati cifrati ---------- */
+var SK={code:'buoni.sync.code',rev:'buoni.sync.rev',last:'buoni.sync.last',err:'buoni.sync.err',del:'buoni.deleted'};
+var SYNC_FIELDS=['shop','name','card','pin','bc','bal','date','ref','balNote','mode','upd'];
+function loadDel(){try{var d=JSON.parse(localStorage.getItem(SK.del));return d&&typeof d==='object'&&!Array.isArray(d)?d:{}}catch(e){return{}}}
+function saveDel(d){localStorage.setItem(SK.del,JSON.stringify(d))}
+function markDeleted(card){if(!card)return;var d=loadDel();d[card]=String(Date.now());saveDel(d)}
+function undelete(card){var d=loadDel();if(card&&d[card]){delete d[card];saveDel(d)}}
+function normCode(c){return String(c||'').trim().toLowerCase()}
+function syncCode(){return localStorage.getItem(SK.code)||''}
+function hex(buf){return Array.prototype.map.call(new Uint8Array(buf),function(b){return('0'+b.toString(16)).slice(-2)}).join('')}
+var enc=new TextEncoder(),dec=new TextDecoder(),keyCache={};
+async function roomId(code){return hex(await crypto.subtle.digest('SHA-256',enc.encode(normCode(code))))}
+async function deriveKey(code,saltB64){
+  var ck=normCode(code)+'|'+saltB64;if(keyCache[ck])return keyCache[ck];
+  var base=await crypto.subtle.importKey('raw',enc.encode(normCode(code)),'PBKDF2',false,['deriveKey']);
+  var k=await crypto.subtle.deriveKey({name:'PBKDF2',salt:new Uint8Array(b64dec(saltB64)),iterations:250000,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  keyCache={};keyCache[ck]=k;return k;
+}
+async function encryptState(code,state,saltB64){
+  saltB64=saltB64||b64enc(crypto.getRandomValues(new Uint8Array(16)).buffer);
+  var iv=crypto.getRandomValues(new Uint8Array(12)),k=await deriveKey(code,saltB64);
+  var ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},k,enc.encode(JSON.stringify(state)));
+  return {ciphertext:b64enc(ct),iv:b64enc(iv.buffer),salt:saltB64};
+}
+async function decryptState(code,p){
+  var k=await deriveKey(code,p.salt),pt;
+  try{pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(b64dec(p.iv))},k,b64dec(p.ciphertext))}
+  catch(e){throw new Error('Codice famiglia sbagliato o dati rovinati')}
+  var st=JSON.parse(dec.decode(pt));if(!st||st.app!=='buoni'||!Array.isArray(st.items))throw new Error('Dati cloud non validi');
+  return st;
+}
+function pick(it){var o={};SYNC_FIELDS.forEach(function(k){if(it[k]!=null&&it[k]!=='')o[k]=String(it[k])});return o}
+function localState(){
+  var arr=items.map(pick).sort(function(a,b){return a.card<b.card?-1:a.card>b.card?1:0});
+  var d=loadDel(),dd={};Object.keys(d).sort().forEach(function(k){dd[k]=d[k]});
+  return {app:'buoni',version:1,items:arr,deleted:dd};
+}
+function sameState(a,b){return JSON.stringify({i:a.items,d:a.deleted})===JSON.stringify({i:b.items,d:b.deleted})}
+/* Unione: stesso numero carta -> vince la modifica più recente (upd), poi la data saldo più nuova (come «Importa backup»). */
+async function mergeSync(st){
+  var d=loadDel(),rd=st.deleted&&typeof st.deleted==='object'?st.deleted:{},n=0,gone=[];
+  Object.keys(rd).forEach(function(c){if(+rd[c]>(+d[c]||0))d[c]=String(rd[c])});
+  var next=items.slice();
+  st.items.forEach(function(o){
+    var card=o&&clean(o.card);if(!card)return;
+    var ex=next.filter(function(x){return x.card===card})[0],ru=+o.upd||0;
+    if(!ex){var it=normItem(o,next);if(it){next.push(it);n++}return}
+    var lu=+ex.upd||0,nd=dateNum(o.date);
+    if(ru>lu){SYNC_FIELDS.forEach(function(k){if(k==='card')return;if(o[k]!=null&&o[k]!=='')ex[k]=String(o[k]);else delete ex[k]});ex.bal=ex.bal?parseBal(ex.bal):'';ex.date=dateNum(ex.date);n++}
+    else if(ru===lu&&nd&&nd>(ex.date||'')){ex.bal=o.bal?parseBal(o.bal):'';ex.date=nd;ex.balNote=o.balNote?String(o.balNote):'';n++}
+  });
+  next=next.filter(function(x){if(d[x.card]&&+d[x.card]>=(+x.upd||0)){gone.push(x.id);n++;return false}return true});
+  saveDel(d);items=next;localStorage.setItem(KEY,JSON.stringify(items));
+  for(var i=0;i<gone.length;i++)await delFile(gone[i]);
+  return n;
+}
+async function api(method,rid,body,ifMatch){
+  var h={};if(body)h['Content-Type']='application/json';if(ifMatch!=null)h['If-Match']=String(ifMatch);
+  var r;try{r=await fetch(SYNC_BASE.replace(/\/+$/,'')+'/v1/rooms/'+rid,{method:method,headers:h,body:body?JSON.stringify(body):undefined,cache:'no-store'})}
+  catch(e){throw new Error('Nessuna connessione al cloud')}
+  var j=null;try{j=await r.json()}catch(e){}
+  return {status:r.status,data:j};
+}
+function setStatus(t,err){var el=$('syncStatus');el.textContent=t;el.classList.toggle('err',!!err)}
+function fmtWhen(iso){var d=new Date(iso);if(isNaN(d))return'';return String(d.getDate()).padStart(2,'0')+'.'+String(d.getMonth()+1).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
+function showSyncStatus(){
+  if(!syncCode()){setStatus('Sync famiglia non attiva');return}
+  var e=localStorage.getItem(SK.err);if(e){setStatus('Errore: '+e,true);return}
+  var l=localStorage.getItem(SK.last);setStatus(l?'Ultima sync: '+fmtWhen(l):'Codice salvato, mai sincronizzato');
+}
+function okSync(rev){if(rev!=null)localStorage.setItem(SK.rev,String(rev));localStorage.setItem(SK.last,new Date().toISOString());localStorage.removeItem(SK.err)}
+function afterChange(){if($('list').classList.contains('on'))renderList();else if($('bar').classList.contains('on')&&cur&&!find(cur)){renderList();show('list')}}
+/* pull: scarica e unisce. push: invia (409 -> unisci e reinvia una volta). */
+async function pullMerge(code,rid){
+  var r=await api('GET',rid);
+  if(r.status===404)return {exists:false,changed:0};
+  if(r.status!==200||!r.data)throw new Error('Cloud non raggiungibile ('+r.status+')');
+  var st=await decryptState(code,r.data),n=await mergeSync(st);
+  localStorage.setItem(SK.rev,String(r.data.rev));
+  return {exists:true,changed:n,rev:r.data.rev,salt:r.data.salt,same:sameState(localState(),st)};
+}
+async function pushState(code,rid,salt,retry){
+  var p=await encryptState(code,localState(),salt),ifm=localStorage.getItem(SK.rev)||'0';
+  p.updatedAt=new Date().toISOString();
+  var r=await api('PUT',rid,p,ifm);
+  if(r.status===200&&r.data){okSync(r.data.rev);return r.data.rev}
+  if(r.status===409&&r.data&&r.data.ciphertext&&!retry){
+    await mergeSync(await decryptState(code,r.data));localStorage.setItem(SK.rev,String(r.data.rev));
+    return pushState(code,rid,r.data.salt,true);
+  }
+  if(r.status===409&&!retry){localStorage.setItem(SK.rev,String(r.data&&r.data.rev||0));return pushState(code,rid,salt,true)} // stanza vuota/rev vecchia
+  throw new Error(r.status===409?'Conflitto: riprova':'Invio non riuscito ('+r.status+')');
+}
+var syncing=null,syncAgain=false;
+function runSync(kind,quiet){
+  if(syncing){syncAgain=true;return syncing}
+  var code=syncCode();if(!code){if(!quiet)toast('Prima salva il codice famiglia');return Promise.resolve()}
+  if(!window.crypto||!crypto.subtle){setStatus('Errore: cifratura non disponibile (serve https)',true);return Promise.resolve()}
+  setStatus('Sincronizzo…');
+  syncing=(async function(){
+    try{
+      var rid=await roomId(code),msg;
+      if(kind==='push'){await pushState(code,rid,null,false);msg='Inviato al cloud'}
+      else{
+        var r=await pullMerge(code,rid);
+        if(kind==='pull'){if(r.exists)okSync(r.rev);msg=!r.exists?'Cloud vuoto: usa «Invia al cloud»':r.changed?'Buoni aggiornati dal cloud':'Già aggiornato'}
+        else if(!r.exists||!r.same){await pushState(code,rid,r.salt,false);msg=r.changed?'Sincronizzato':'Inviato al cloud'}
+        else{okSync(r.rev);msg=r.changed?'Buoni aggiornati dal cloud':'Già aggiornato'}
+      }
+      afterChange();if(!quiet)toast(msg);
+    }catch(e){console.warn('sync',e);localStorage.setItem(SK.err,e.message||'sync');if(!quiet)toast(e.message)}
+    finally{syncing=null;showSyncStatus();if(syncAgain){syncAgain=false;scheduleSync()}}
+  })();
+  return syncing;
+}
+var syncT=null;
+function scheduleSync(){if(!syncCode())return;clearTimeout(syncT);syncT=setTimeout(function(){runSync('auto',true)},1500)}
+function maskCode(c){c=String(c);return '••••••'+c.slice(-2)}
+function genCode(){var a='abcdefghjkmnpqrstuvwxyz23456789',u=crypto.getRandomValues(new Uint8Array(16)),s='';for(var i=0;i<16;i++){s+=a[u[i]%a.length];if(i%4===3&&i<15)s+='-'}return s}
+function renderSyncPanel(){
+  var on=!!syncCode();$('syncSet').style.display=on?'none':'block';$('syncOn').style.display=on?'block':'none';
+  if(on)$('syncMask').textContent=maskCode(syncCode());showSyncStatus();
+}
+$('syncBtn').onclick=function(){
+  var p=$('syncPanel'),open=!p.classList.contains('on');p.classList.toggle('on',open);renderSyncPanel();
+  if(syncCode())runSync('auto',false);
+};
+$('syncGenBtn').onclick=function(){$('syncCode').value=genCode();toast('Scrivilo e dallo a Chiara, poi «Salva codice»')};
+$('syncSaveBtn').onclick=function(){
+  var c=normCode($('syncCode').value);if(c.length<10){toast('Codice troppo corto (min 10)');return}
+  localStorage.setItem(SK.code,c);localStorage.removeItem(SK.rev);localStorage.removeItem(SK.last);localStorage.removeItem(SK.err);
+  $('syncCode').value='';renderSyncPanel();runSync('auto',false);
+};
+$('syncOffBtn').onclick=function(){
+  if(!confirm('Rimuovere il codice da questo telefono? I buoni restano qui.'))return;
+  [SK.code,SK.rev,SK.last,SK.err].forEach(function(k){localStorage.removeItem(k)});keyCache={};renderSyncPanel();toast('Sync famiglia disattivata');
+};
+$('syncPullBtn').onclick=function(){runSync('pull',false)};
+$('syncPushBtn').onclick=function(){runSync('push',false)};
+document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')scheduleSync()});
+window.Buoni={encode128:encode128,parseVoucher:parseVoucher,importFiles:importFiles,backupJson:backupJson,mergeBackup:mergeBackup,getFile:getFile,openViewer:openViewer,fileIds:function(){return Object.keys(fileIds)},sync:runSync,mergeSync:mergeSync,localState:localState,roomId:roomId,encryptState:encryptState,decryptState:decryptState,onSave:scheduleSync,syncBase:function(){return SYNC_BASE}};
 
 renderList();
 loadFileIds().then(renderList);
+showSyncStatus();scheduleSync();
 })();
 </script>
 </body>
