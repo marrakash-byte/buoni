@@ -69,12 +69,13 @@ input,select{width:100%;min-height:50px;font-size:18px;padding:10px 12px;border:
   <div class="box" id="syncBox" style="margin-top:24px;background:#fff">
     <button class="btn" id="syncBtn" type="button">Sincronizza famiglia</button>
     <div class="hint" id="syncStatus">Sync famiglia non attiva</div>
+    <button class="btn small sec" id="syncCfgBtn" type="button" style="display:none;margin-top:8px">Impostazioni sync</button>
     <div id="syncPanel">
       <div id="syncSet">
         <label for="syncCode" style="margin-top:4px">Codice famiglia</label>
         <input id="syncCode" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="almeno 10 caratteri">
         <div class="hint">Stesso codice su entrambi i telefoni. Chi ha il codice vede i buoni: non condividerlo con altri.</div>
-        <div class="row" style="margin-top:10px"><button class="btn sec" id="syncGenBtn" type="button">Genera codice</button><button class="btn" id="syncSaveBtn" type="button">Salva codice</button></div>
+        <div class="row" style="margin-top:10px"><button class="btn sec" id="syncGenBtn" type="button">Genera codice</button><button class="btn" id="syncSaveBtn" type="button">Salva e sincronizza</button></div>
       </div>
       <div id="syncOn" style="display:none">
         <div class="hint" style="margin:0">Codice: <span class="pin" id="syncMask"></span></div>
@@ -771,6 +772,37 @@ function markDeleted(card){if(!card)return;var d=loadDel();d[card]=String(Date.n
 function undelete(card){var d=loadDel();if(card&&d[card]){delete d[card];saveDel(d)}}
 function normCode(c){return String(c||'').trim().toLowerCase()}
 function syncCode(){return localStorage.getItem(SK.code)||''}
+/* Codice anche in IndexedDB (buoni-meta): se Safari svuota localStorage, lo recuperiamo. */
+var MDB='buoni-meta',MST='meta',mdbP=null;
+function mdb(){
+  if(!mdbP){mdbP=new Promise(function(res,rej){
+    if(!window.indexedDB){rej(new Error('IndexedDB non disponibile'));return}
+    var r=indexedDB.open(MDB,1);
+    r.onupgradeneeded=function(){if(!r.result.objectStoreNames.contains(MST))r.result.createObjectStore(MST)};
+    r.onsuccess=function(){var d=r.result;d.onversionchange=function(){d.close();mdbP=null};res(d)};
+    r.onerror=function(){rej(r.error||new Error('IndexedDB'))};
+  }).catch(function(e){mdbP=null;throw e})}
+  return mdbP;
+}
+function metaOp(mode,fn){return mdb().then(function(d){return new Promise(function(res,rej){
+  var t=d.transaction(MST,mode),r=fn(t.objectStore(MST)),out;
+  if(r)r.onsuccess=function(){out=r.result};
+  t.oncomplete=function(){res(out)};t.onerror=t.onabort=function(){rej(t.error||new Error('IndexedDB'))};
+})}).catch(function(e){console.warn('meta',e)})}
+function setSyncCode(c){
+  c=normCode(c);localStorage.setItem(SK.code,c);[SK.rev,SK.last,SK.err].forEach(function(k){localStorage.removeItem(k)});
+  if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(function(){});
+  return metaOp('readwrite',function(s){return s.put(c,'syncCode')});
+}
+function clearSyncCode(){
+  [SK.code,SK.rev,SK.last,SK.err].forEach(function(k){localStorage.removeItem(k)});keyCache={};
+  return metaOp('readwrite',function(s){return s.delete('syncCode')});
+}
+async function restoreSyncCode(){
+  var ls=syncCode(),c=await metaOp('readonly',function(s){return s.get('syncCode')});
+  if(!ls&&c&&normCode(c).length>=10)localStorage.setItem(SK.code,normCode(c));
+  else if(ls&&c!==ls)metaOp('readwrite',function(s){return s.put(ls,'syncCode')}); // copia in IDB i codici salvati prima
+}
 function hex(buf){return Array.prototype.map.call(new Uint8Array(buf),function(b){return('0'+b.toString(16)).slice(-2)}).join('')}
 var enc=new TextEncoder(),dec=new TextDecoder(),keyCache={};
 async function roomId(code){return hex(await crypto.subtle.digest('SHA-256',enc.encode(normCode(code))))}
@@ -828,9 +860,11 @@ async function api(method,rid,body,ifMatch){
 function setStatus(t,err){var el=$('syncStatus');el.textContent=t;el.classList.toggle('err',!!err)}
 function fmtWhen(iso){var d=new Date(iso);if(isNaN(d))return'';return String(d.getDate()).padStart(2,'0')+'.'+String(d.getMonth()+1).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
 function showSyncStatus(){
-  if(!syncCode()){setStatus('Sync famiglia non attiva');return}
-  var e=localStorage.getItem(SK.err);if(e){setStatus('Errore: '+e,true);return}
-  var l=localStorage.getItem(SK.last);setStatus(l?'Ultima sync: '+fmtWhen(l):'Codice salvato, mai sincronizzato');
+  var c=syncCode();$('syncCfgBtn').style.display=c?'':'none';
+  if(!c){setStatus('Sync famiglia non attiva');return}
+  var m=' · codice salvato '+maskCode(c);
+  var e=localStorage.getItem(SK.err);if(e){setStatus('Errore: '+e+m,true);return}
+  var l=localStorage.getItem(SK.last);setStatus((l?'Ultima sync: '+fmtWhen(l):'Mai sincronizzato')+m);
 }
 function okSync(rev){if(rev!=null)localStorage.setItem(SK.rev,String(rev));localStorage.setItem(SK.last,new Date().toISOString());localStorage.removeItem(SK.err)}
 function afterChange(){if($('list').classList.contains('on'))renderList();else if($('bar').classList.contains('on')&&cur&&!find(cur)){renderList();show('list')}}
@@ -885,19 +919,22 @@ function renderSyncPanel(){
   var on=!!syncCode();$('syncSet').style.display=on?'none':'block';$('syncOn').style.display=on?'block':'none';
   if(on)$('syncMask').textContent=maskCode(syncCode());showSyncStatus();
 }
-$('syncBtn').onclick=function(){
-  var p=$('syncPanel'),open=!p.classList.contains('on');p.classList.toggle('on',open);renderSyncPanel();
-  if(syncCode())runSync('auto',false);
-};
-$('syncGenBtn').onclick=function(){$('syncCode').value=genCode();toast('Scrivilo e dallo a Chiara, poi «Salva codice»')};
-$('syncSaveBtn').onclick=function(){
+async function saveAndSync(){
   var c=normCode($('syncCode').value);if(c.length<10){toast('Codice troppo corto (min 10)');return}
-  localStorage.setItem(SK.code,c);localStorage.removeItem(SK.rev);localStorage.removeItem(SK.last);localStorage.removeItem(SK.err);
-  $('syncCode').value='';renderSyncPanel();runSync('auto',false);
+  await setSyncCode(c);$('syncCode').value='';$('syncPanel').classList.remove('on');renderSyncPanel();
+  toast('Codice salvato su questo telefono: non serve più rimetterlo');runSync('auto',true);
+}
+$('syncBtn').onclick=function(){
+  if(syncCode()){showSyncStatus();runSync('auto',false);return} // codice salvato: sync diretta, niente richiesta codice
+  if(normCode($('syncCode').value).length>=10){saveAndSync();return}
+  $('syncPanel').classList.add('on');renderSyncPanel();toast('Genera o incolla il codice famiglia, poi «Salva e sincronizza»');
 };
-$('syncOffBtn').onclick=function(){
+$('syncCfgBtn').onclick=function(){var p=$('syncPanel');p.classList.toggle('on');renderSyncPanel()};
+$('syncGenBtn').onclick=function(){$('syncCode').value=genCode();toast('Scrivilo e dallo a Chiara, poi «Salva e sincronizza»')};
+$('syncSaveBtn').onclick=saveAndSync;
+$('syncOffBtn').onclick=async function(){
   if(!confirm('Rimuovere il codice da questo telefono? I buoni restano qui.'))return;
-  [SK.code,SK.rev,SK.last,SK.err].forEach(function(k){localStorage.removeItem(k)});keyCache={};renderSyncPanel();toast('Sync famiglia disattivata');
+  await clearSyncCode();renderSyncPanel();toast('Sync famiglia disattivata');
 };
 $('syncPullBtn').onclick=function(){runSync('pull',false)};
 $('syncPushBtn').onclick=function(){runSync('push',false)};
@@ -906,7 +943,8 @@ window.Buoni={encode128:encode128,parseVoucher:parseVoucher,importFiles:importFi
 
 renderList();
 loadFileIds().then(renderList);
-showSyncStatus();scheduleSync();
+showSyncStatus();
+restoreSyncCode().then(function(){renderSyncPanel();scheduleSync()});
 })();
 </script>
 </body>
